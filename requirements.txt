@@ -23,21 +23,15 @@
 # plotly
 
 streamlit
-numpy
 pandas
-scikit-learn
+numpy
 yfinance
-
+scikit-learn
 tensorflow-cpu
 plotly
-requests
-
 transformers
-torch
-sentencepiece
 sentence-transformers
-
 chromadb
-
 python-dotenv
+requests
 google-generativeai
