@@ -1,11 +1,12 @@
+
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
-from google import genai
+import google.generativeai as genai
 
-# ✅ Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# ✅ Configure Gemini API correctly
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 def get_recommendation(amount, currency, risk, horizon, goal,
@@ -108,46 +109,27 @@ YOUR TASKS — Respond in this exact structure:
 ─────────────────────────────────────────
 
 ## 📊 ALLOCATION RATIONALE
-For every coin that was allocated, explain:
-- Why this coin deserved a position (LSTM signal + sentiment alignment)
-- Why it received this specific weight relative to others
-- Any concerns or caveats with this allocation
+Explain why each allocated coin was chosen and weighted.
 
 ## ❌ EXCLUSION RATIONALE
-For every coin that was skipped/excluded, explain:
-- Why the system excluded it (weak LSTM, negative sentiment, risk profile mismatch)
-- Whether you agree with the exclusion or think it should be reconsidered
+Explain why skipped coins were excluded.
 
 ## ⚖️ SIGNAL CONFLICTS
-Identify any coin where LSTM forecast and FinBERT sentiment point in opposite directions.
-- State which signal you trust more for each conflicted coin and why.
-- Note if any news headlines explain the conflict.
+Highlight LSTM vs sentiment conflicts.
 
 ## 🤖 MY INDEPENDENT RECOMMENDATION
-Give your own expert view on this portfolio. You may:
-- Agree with the system and reinforce why
-- Suggest adjusting weights (e.g., "reduce BTC to 30%, increase ETH to 25%")
-- Flag coins you would add or remove entirely
-- Comment on whether this allocation suits the user's stated risk profile and goal
-Be specific. Reference the data. Do not just repeat the allocation — add genuine insight.
+Provide expert suggestions or improvements.
 
 ## ⚠️ RISK ASSESSMENT
-- Identify the single largest risk in this portfolio
-- Assess whether the {stop_loss}% stop-loss is appropriate given the downside forecasts
-- Give one concrete action the user should take to protect their capital
+Identify risks and evaluate stop-loss.
 
 {detail}"""
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config={
-                "temperature": 0.4,
-                "max_output_tokens": 10000
-            }
-        )
-        return response.text
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+
+        return response.text if hasattr(response, "text") else str(response)
 
     except Exception as e:
         print("Gemini API Error:", e)
