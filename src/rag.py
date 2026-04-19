@@ -2,98 +2,159 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import requests, os
-from config import COIN_REGISTRY
 from functools import lru_cache
 
-CP_KEY = os.getenv("CRYPTOPANIC_KEY")
+# ─────────────────────────────────────────────────────────────
+# ENV
+# ─────────────────────────────────────────────────────────────
+GNEWS_KEY = os.getenv("GNEWS_API_KEY")
 
 
-@lru_cache(maxsize=32)   # ⭐ RIGHT HERE
-def fetch_news(coin: str, limit=20) -> list:
-    if not CP_KEY:
-        print("❌ CRYPTOPANIC_KEY missing")
-        return []
-
-    slug = COIN_REGISTRY[coin]["cp_slug"]
+# ─────────────────────────────────────────────────────────────
+# FETCH NEWS (GNEWS - WORKING)
+# ─────────────────────────────────────────────────────────────
+@lru_cache(maxsize=32)
+def fetch_news(coin: str, limit=10) -> list:
+    if not GNEWS_KEY:
+        print("❌ GNEWS_API_KEY missing")
+        return [f"No news available for {coin}"]
 
     try:
+        query = f"{coin} cryptocurrency"
+
         r = requests.get(
-            "https://cryptopanic.com/api/developer/v2/posts/",
+            "https://gnews.io/api/v4/search",
             params={
-                "auth_token": CP_KEY,
-                "currencies": slug,
+                "q": query,
+                "lang": "en",
+                "max": limit,
+                "token": GNEWS_KEY
             },
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10,
         )
 
-        print("🌐 API CALLED:", coin)
+        print("🌐 GNEWS API CALLED:", coin)
 
         r.raise_for_status()
 
         data = r.json()
+        articles = data.get("articles", [])
 
-        return [p.get("title", "") for p in data.get("results", [])[:limit]]
+        headlines = [
+            a.get("title", "")
+            for a in articles
+            if a.get("title")
+        ]
+
+        if not headlines:
+            headlines = [f"No recent news found for {coin}"]
+
+        return headlines[:limit]
 
     except Exception as e:
-        print("❌ FETCH ERROR:", e)
-        return []
+        print(f"❌ GNEWS ERROR ({coin}):", e)
+        return [f"News unavailable for {coin}"]
 
-def fetch_all_news() -> dict:
-    return {coin: fetch_news(coin) for coin in COIN_REGISTRY}
 
+def fetch_all_news(coins: list) -> dict:
+    return {coin: fetch_news(coin) for coin in coins}
+
+
+# ─────────────────────────────────────────────────────────────
+# VECTOR DB SETUP
+# ─────────────────────────────────────────────────────────────
 import chromadb
 from sentence_transformers import SentenceTransformer
 import hashlib
 
-embedder   = SentenceTransformer("all-MiniLM-L6-v2")
-db_client  = chromadb.PersistentClient(path="chroma_db/")
-collection = db_client.get_or_create_collection("crypto_news")
+_embedder = None
+_collection = None
 
 
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        print("🔄 Loading embedding model...")
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
+
+
+def get_collection():
+    global _collection
+    if _collection is None:
+        client = chromadb.PersistentClient(path="chroma_db/")
+        _collection = client.get_or_create_collection("crypto_news")
+    return _collection
+
+
+# ─────────────────────────────────────────────────────────────
+# INGEST
+# ─────────────────────────────────────────────────────────────
 def ingest_news(headlines: list, coin: str):
     if not headlines:
         return
 
-    # ⭐ CRITICAL — Remove duplicates
+    # Remove duplicates
     headlines = list(dict.fromkeys(headlines))
 
-    embs = embedder.encode(
-        headlines,
-        batch_size=32,
-        show_progress_bar=False
-    ).tolist()
+    embedder = get_embedder()
+    collection = get_collection()
 
-    # ⭐ Stable deterministic IDs
-    ids = [
-        f"{coin}_{hashlib.md5(h.encode()).hexdigest()}"
-        for h in headlines
-    ]
+    try:
+        embs = embedder.encode(
+            headlines,
+            batch_size=32,
+            show_progress_bar=False
+        ).tolist()
 
-    collection.upsert(
-        ids=ids,
-        documents=headlines,
-        embeddings=embs,
-        metadatas=[{"coin": coin}] * len(headlines),
-    )
+        ids = [
+            f"{coin}_{hashlib.md5(h.encode()).hexdigest()}"
+            for h in headlines
+        ]
+
+        collection.upsert(
+            ids=ids,
+            documents=headlines,
+            embeddings=embs,
+            metadatas=[{"coin": coin}] * len(headlines),
+        )
+
+    except Exception as e:
+        print(f"❌ INGEST ERROR ({coin}):", e)
 
 
 def ingest_all(coin_headlines: dict):
     for coin, headlines in coin_headlines.items():
         ingest_news(headlines, coin)
 
+
+# ─────────────────────────────────────────────────────────────
+# RETRIEVE
+# ─────────────────────────────────────────────────────────────
 def retrieve_for_coin(coin: str, n=5) -> list:
-    query = f"{coin} cryptocurrency price forecast outlook"
+    try:
+        embedder = get_embedder()
+        collection = get_collection()
 
-    q_emb = embedder.encode(
-        [query],
-        show_progress_bar=False
-    ).tolist()
+        query = f"{coin} cryptocurrency price forecast outlook"
 
-    res = collection.query(
-        query_embeddings=q_emb,
-        n_results=n,
-        where={"coin": {"$eq": coin}},
-    )
+        q_emb = embedder.encode(
+            [query],
+            show_progress_bar=False
+        ).tolist()
 
-    return res["documents"][0] if res["documents"] else []
+        res = collection.query(
+            query_embeddings=q_emb,
+            n_results=n,
+            where={"coin": {"$eq": coin}},
+        )
+
+        if res and res.get("documents"):
+            return res["documents"][0]
+
+        return []
+
+    except Exception as e:
+        print(f"❌ RETRIEVE ERROR ({coin}):", e)
+        return []

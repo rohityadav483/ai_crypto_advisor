@@ -1,9 +1,24 @@
 import streamlit as st
-import requests
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
-from config import COIN_REGISTRY, DEFAULT_SELECTED
+import os
+
+# ─── Secrets → env vars (Streamlit Cloud only, safe to skip locally) ─────────
+try:
+    for key in ["CRYPTOPANIC_KEY", "GEMINI_API_KEY"]:
+        if key in st.secrets:
+            os.environ[key] = st.secrets[key]
+except Exception:
+    pass  # Running locally — keys are loaded from .env by each src module
+
+# ─── Direct imports (replaces FastAPI/requests) ───────────────────────────────
+from src.lstm_engine import predict_coin
+from src.sentiment   import score_all_coins
+from src.rag         import fetch_news, ingest_news, retrieve_for_coin
+from src.allocation  import compute_allocation, portfolio_summary
+from src.advisor     import get_recommendation
+from config          import COIN_REGISTRY, DEFAULT_SELECTED
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -14,19 +29,21 @@ st.set_page_config(
 )
 
 # ─── Design System ────────────────────────────────────────────────────────────
-BG       = "#0F1117"
-SURFACE  = "#1A1D27"
-SURFACE2 = "#21253A"
-BORDER   = "#2D3149"
-PRIMARY  = "#4F8EF7"
-ACCENT   = "#2ECC71"
-WARNING  = "#F0A500"
-DANGER   = "#E05C5C"
-PURPLE   = "#9B7FE8"
-CYAN     = "#22D3EE"
-TEXT     = "#E8ECF4"
-MUTED    = "#7A80A0"
-FAINT    = "#3E4260"
+BG       = "#0A0E27"
+SURFACE  = "#141824"
+SURFACE2 = "#1A1F37"
+BORDER   = "#1E2540"
+PRIMARY  = "#EAB308"
+ACCENT   = "#10B981"
+WARNING  = "#F59E0B"
+DANGER   = "#EF4444"
+YELLOW2  = "#FCD34D"
+AMBER    = "#D97706"
+CYAN     = "#06B6D4"
+PURPLE   = "#8B5CF6"
+TEXT     = "#F1F5F9"
+MUTED    = "#64748B"
+FAINT    = "#1E2540"
 
 RISK_COLORS = {"Conservative": ACCENT, "Balanced": WARNING, "Aggressive": DANGER}
 
@@ -84,8 +101,6 @@ st.markdown(f"""
       background: {PRIMARY} !important;
       border-color: {PRIMARY} !important;
   }}
-
-  /* ── Select slider ── */
   [data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] {{
       background: {PRIMARY} !important;
   }}
@@ -259,7 +274,7 @@ st.markdown(f"""
       LSTM + FinBERT</span>
     <span style="background:{PRIMARY}22;border:1px solid {PRIMARY}44;border-radius:6px;
                  padding:4px 12px;font-size:0.73rem;color:{PRIMARY};font-weight:600">
-      Claude Synthesis</span>
+      AI Recommendation</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -364,7 +379,7 @@ if not analyze:
           for lbl, sub, c in [
               ("LSTM",    "Price Prediction",   WARNING),
               ("FinBERT", "Sentiment Analysis", CYAN),
-              ("Claude",  "AI Synthesis",       PRIMARY),
+              ("Gemini",  "AI Synthesis",       PRIMARY),
               ("Live",    "Real-Time Prices",   ACCENT),
           ]
         ])}
@@ -375,7 +390,7 @@ if not analyze:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ANALYSIS PIPELINE
+# ANALYSIS PIPELINE — direct function calls, no HTTP requests
 # ═══════════════════════════════════════════════════════════════════════════════
 lstm_r, sent_r, news_r = {}, {}, {}
 n = len(sel_coins)
@@ -383,7 +398,7 @@ n = len(sel_coins)
 prog_bar = st.progress(0, text="Starting analysis…")
 status   = st.empty()
 
-# Stage 1 — per-coin predictions
+# Stage 1 — per-coin: fetch news → ingest → sentiment → RAG → LSTM
 for i, coin in enumerate(sel_coins):
     status.markdown(f"""
     <div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;
@@ -397,10 +412,22 @@ for i, coin in enumerate(sel_coins):
       </div>
     </div>""", unsafe_allow_html=True)
 
-    r            = requests.get(f"http://localhost:8000/predict/{coin}").json()
-    lstm_r[coin] = r["lstm"]
-    sent_r[coin] = r["sentiment"]
-    news_r[coin] = r["news"]
+    try:
+        headlines    = fetch_news(coin)
+        ingest_news(headlines, coin)
+        sentiment    = score_all_coins({coin: headlines})[coin]
+        news_ctx     = retrieve_for_coin(coin, n=5)
+        lstm         = predict_coin(coin)
+        lstm_r[coin] = lstm
+        sent_r[coin] = sentiment
+        news_r[coin] = news_ctx
+    except Exception as e:
+        st.warning(f"⚠️ {coin} failed: {e}. Skipping.")
+        lstm_r[coin] = {"error": str(e), "upside (%)": 0, "downside (%)": 0,
+                        "current_price": 0, "predicted_price": 0}
+        sent_r[coin] = {"score": 0.0, "label": "Neutral", "count": 0}
+        news_r[coin] = []
+
     prog_bar.progress((i + 1) / n,
                       text=f"✅ {coin} complete ({i+1}/{n})")
 
@@ -411,18 +438,31 @@ status.markdown(f"""
   <span style="font-size:1rem">🤖</span>
   <div>
     <p style="margin:0;font-size:0.85rem;font-weight:600;color:{TEXT}">
-      Generating Claude recommendation…</p>
+      Generating AI recommendation…</p>
     <p style="margin:0;font-size:0.75rem;color:{MUTED}">
       Synthesising LSTM + sentiment signals into portfolio advice</p>
   </div>
 </div>""", unsafe_allow_html=True)
 
-resp = requests.post("http://localhost:8000/synthesize", json={
-    "amount": amount,   "currency": currency, "risk": risk,
-    "horizon": horizon, "goal": goal,         "stop_loss": stop_loss,
-    "existing": existing, "verbosity": verbosity,
-    "lstm": lstm_r, "sentiment": sent_r, "news": news_r,
-}).json()
+# Build allocation + summary + advice via direct function calls
+allocation = compute_allocation(amount, lstm_r, risk)
+
+if not allocation:
+    advice  = "All selected coins show negative forecasts. This is not a good time to invest."
+    summary = {}
+else:
+    summary = portfolio_summary(amount, allocation)
+    advice  = get_recommendation(
+        amount=amount,        currency=currency,
+        risk=risk,            horizon=horizon,
+        goal=goal,            stop_loss=stop_loss,
+        lstm_results=lstm_r,
+        sentiment_map=sent_r,
+        news_context=news_r,
+        allocation=allocation,
+        existing=existing,
+        verbosity=verbosity,
+    )
 
 prog_bar.empty()
 status.empty()
@@ -431,8 +471,25 @@ status.empty()
 # ═══════════════════════════════════════════════════════════════════════════════
 # RESULTS
 # ═══════════════════════════════════════════════════════════════════════════════
-alloc = resp["allocation"]
-s     = resp["summary"]
+alloc = allocation
+s     = summary
+
+def safe_pct(key, *fallbacks):
+    for k in (key, *fallbacks):
+        if k in s:
+            return s[k]
+    return "N/A"
+
+def safe_inr(key, *fallbacks):
+    for k in (key, *fallbacks):
+        if k in s:
+            return s[k]
+    return 0
+
+total_upside_pct   = safe_pct("total_upside_pct",   "upside_pct",   "upside")
+total_downside_pct = safe_pct("total_downside_pct", "downside_pct", "downside")
+total_upside_inr   = safe_inr("total_upside_inr",   "upside_inr",   "upside_amount")
+total_downside_inr = safe_inr("total_downside_inr", "downside_inr", "downside_amount")
 
 # ── Summary banner ────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -453,10 +510,10 @@ st.markdown(f"""
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <span style="background:{ACCENT}22;border:1px solid {ACCENT}44;border-radius:6px;
                  padding:4px 12px;font-size:0.78rem;color:{ACCENT};font-weight:700">
-      ↑ {s['total_upside_pct']}% Upside</span>
+      ↑ {total_upside_pct}% Upside</span>
     <span style="background:{DANGER}22;border:1px solid {DANGER}44;border-radius:6px;
                  padding:4px 12px;font-size:0.78rem;color:{DANGER};font-weight:700">
-      ↓ {s['total_downside_pct']}% Downside</span>
+      ↓ {total_downside_pct}% Downside</span>
     <span style="background:{risk_col}22;border:1px solid {risk_col}44;border-radius:6px;
                  padding:4px 12px;font-size:0.78rem;color:{risk_col};font-weight:700">
       {risk} Profile</span>
@@ -467,11 +524,11 @@ st.markdown(f"""
 # ── KPI metrics ───────────────────────────────────────────────────────────────
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Total Upside",
-          f"{s['total_upside_pct']}%",
-          f"+{currency} {s['total_upside_inr']:,.0f}")
+          f"{total_upside_pct}%",
+          f"+{currency} {total_upside_inr:,.0f}" if isinstance(total_upside_inr, (int, float)) else "—")
 m2.metric("Total Downside",
-          f"{s['total_downside_pct']}%",
-          f"−{currency} {s['total_downside_inr']:,.0f}",
+          f"{total_downside_pct}%",
+          f"−{currency} {total_downside_inr:,.0f}" if isinstance(total_downside_inr, (int, float)) else "—",
           delta_color="inverse")
 m3.metric("Coins Allocated", len(alloc))
 m4.metric("Coins Skipped",   len(sel_coins) - len(alloc))
@@ -504,7 +561,7 @@ with col1:
             font=dict(size=13, color=TEXT, family="Inter"),
         )],
     )
-    st.plotly_chart(fig1, use_container_width=True,
+    st.plotly_chart(fig1, width="stretch",
                     config={"displayModeBar": False})
 
 with col2:
@@ -546,7 +603,7 @@ with col2:
             xanchor="right", x=1,
         ),
     )
-    st.plotly_chart(fig2, use_container_width=True,
+    st.plotly_chart(fig2, width="stretch",
                     config={"displayModeBar": False})
 
 # ── Row 2: Sentiment bar chart ────────────────────────────────────────────────
@@ -582,7 +639,7 @@ fig3.update_layout(
     ),
 )
 fig3.add_hline(y=0, line_dash="dot", line_color=BORDER, line_width=1.5)
-st.plotly_chart(fig3, use_container_width=True,
+st.plotly_chart(fig3, width="stretch",
                 config={"displayModeBar": False})
 
 # ── Coin Detail Cards ─────────────────────────────────────────────────────────
@@ -629,9 +686,9 @@ for idx, (coin, d) in enumerate(alloc.items()):
     </div>
     """, unsafe_allow_html=True)
 
-# ── Claude Recommendation ─────────────────────────────────────────────────────
+# ── AI Recommendation ─────────────────────────────────────────────────────────
 st.markdown(f"<div style='height:8px'></div>", unsafe_allow_html=True)
-section_label("🤖  Claude AI Recommendation")
+section_label("🤖 AI Recommendation")
 
 st.markdown(f"""
 <div style="background:{SURFACE};border:1px solid {PRIMARY}44;
@@ -646,7 +703,7 @@ st.markdown(f"""
     <span style="background:{SURFACE2};border:1px solid {BORDER};border-radius:4px;
                  padding:2px 8px;font-size:0.68rem;color:{MUTED}">{verbosity}</span>
   </div>
-  {resp["advice"].replace(chr(10), "<br>")}
+  {advice.replace(chr(10), "<br>")}
 </div>
 """, unsafe_allow_html=True)
 
@@ -656,7 +713,7 @@ st.markdown(f"""
             display:flex;justify-content:space-between;align-items:center;
             flex-wrap:wrap;gap:8px">
   <span style="font-size:0.73rem;color:{FAINT}">
-    © 2024 CryptoAdvisor AI &nbsp;·&nbsp; LSTM + FinBERT + Claude
+    © 2024 CryptoAdvisor AI &nbsp;·&nbsp; LSTM + FinBERT + AI
   </span>
   <span style="font-size:0.71rem;color:{FAINT}">
     ⚠️ Not financial advice · Do your own research
