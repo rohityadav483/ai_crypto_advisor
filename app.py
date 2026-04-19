@@ -330,7 +330,7 @@ with st.sidebar:
     st.markdown(f"<p style='font-size:0.7rem;font-weight:700;color:{WARNING};text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 6px'>🪙 Coins to Analyse</p>", unsafe_allow_html=True)
     sel_labels = st.multiselect("Select coins (all by default)",
                                  options=all_labels, default=all_labels)
-    sel_coins  = [label_to_coin[l] for l in sel_labels]
+    sel_coins = [label_to_coin[l] for l in sel_labels][:3]
 
     # ── Risk Controls ─────────────────────────────────────────────────────────
     st.markdown(f"<p style='font-size:0.7rem;font-weight:700;color:{DANGER};text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 6px'>🛡 Risk Controls</p>", unsafe_allow_html=True)
@@ -642,49 +642,68 @@ fig3.add_hline(y=0, line_dash="dot", line_color=BORDER, line_width=1.5)
 st.plotly_chart(fig3, width="stretch",
                 config={"displayModeBar": False})
 
+
 # ── Coin Detail Cards ─────────────────────────────────────────────────────────
 st.markdown(f"<div style='height:8px'></div>", unsafe_allow_html=True)
 section_label("🪙  Coin-Level Breakdown")
 
-card_cols = st.columns(min(len(alloc), 4))
-for idx, (coin, d) in enumerate(alloc.items()):
-    sent  = sent_r.get(coin, {})
-    lstm  = lstm_r.get(coin, {})
-    s_col = ACCENT if sent.get("label") == "positive" else (
-            DANGER if sent.get("label") == "negative" else MUTED)
-    up    = get_upside(coin)
-    dn    = get_downside(coin)
+# ✅ FIX 1: Handle empty allocation
+if not alloc:
+    st.warning("No coins allocated. Try different inputs.")
+else:
+    # ✅ FIX 2: Prevent st.columns(0) crash
+    num_cols = max(1, min(len(alloc), 4))
+    card_cols = st.columns(num_cols)
 
-    card_cols[idx % 4].markdown(f"""
-    <div style="background:{SURFACE};border:1px solid {BORDER};
-                border-radius:12px;padding:16px 18px;margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;
-                  align-items:center;margin-bottom:12px">
-        <div>
-          <p style="margin:0;font-size:1rem;font-weight:800;color:{TEXT}">{coin}</p>
-          <p style="margin:2px 0 0;font-size:0.7rem;color:{MUTED}">
-            {d['percent']}% allocation</p>
+    for idx, (coin, d) in enumerate(alloc.items()):
+        sent  = sent_r.get(coin, {})
+        lstm  = lstm_r.get(coin, {})
+
+        s_col = ACCENT if sent.get("label") == "positive" else (
+                DANGER if sent.get("label") == "negative" else MUTED)
+
+        # ✅ FIX 3: Pass correct object (not coin string)
+        up = get_upside(lstm)
+        dn = get_downside(lstm)
+
+        # ✅ FIX 4: Safe indexing (no hardcoded 4)
+        col = card_cols[idx % num_cols]
+
+        col.markdown(f"""
+        <div style="background:{SURFACE};border:1px solid {BORDER};
+                    border-radius:12px;padding:16px 18px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;
+                      align-items:center;margin-bottom:12px">
+            <div>
+              <p style="margin:0;font-size:1rem;font-weight:800;color:{TEXT}">{coin}</p>
+              <p style="margin:2px 0 0;font-size:0.7rem;color:{MUTED}">
+                {d['percent']}% allocation</p>
+            </div>
+            <div style="font-size:1.2rem;font-weight:900;color:{ACCENT}">
+              ₹{d['amount']:,.0f}</div>
+          </div>
+
+          <div style="height:1px;background:{BORDER};margin-bottom:10px"></div>
+
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:0.75rem;color:{MUTED}">Upside</span>
+            <span style="font-size:0.75rem;font-weight:700;color:{ACCENT}">
+              +{up:.1f}%</span>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+            <span style="font-size:0.75rem;color:{MUTED}">Downside</span>
+            <span style="font-size:0.75rem;font-weight:700;color:{DANGER}">
+              -{dn:.1f}%</span>
+          </div>
+
+          <span style="background:{s_col}22;color:{s_col};font-size:0.68rem;
+                       font-weight:700;padding:3px 10px;border-radius:99px;
+                       text-transform:uppercase;letter-spacing:0.04em">
+            {sent.get('label','—')} sentiment</span>
         </div>
-        <div style="font-size:1.2rem;font-weight:900;color:{ACCENT}">
-          ₹{d['amount']:,.0f}</div>
-      </div>
-      <div style="height:1px;background:{BORDER};margin-bottom:10px"></div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-        <span style="font-size:0.75rem;color:{MUTED}">Upside</span>
-        <span style="font-size:0.75rem;font-weight:700;color:{ACCENT}">
-          +{up:.1f}%</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:10px">
-        <span style="font-size:0.75rem;color:{MUTED}">Downside</span>
-        <span style="font-size:0.75rem;font-weight:700;color:{DANGER}">
-          -{dn:.1f}%</span>
-      </div>
-      <span style="background:{s_col}22;color:{s_col};font-size:0.68rem;
-                   font-weight:700;padding:3px 10px;border-radius:99px;
-                   text-transform:uppercase;letter-spacing:0.04em">
-        {sent.get('label','—')} sentiment</span>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+
 
 # ── AI Recommendation ─────────────────────────────────────────────────────────
 st.markdown(f"<div style='height:8px'></div>", unsafe_allow_html=True)
