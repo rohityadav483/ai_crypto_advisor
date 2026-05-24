@@ -1,12 +1,28 @@
+import os
+os.environ["TF_ENABLE_ONEDNN_OPTS"]        = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"]         = "3"   # suppresses TF INFO + WARNING
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"]        = "0"
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import logging
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import os
 
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
 # ─── Secrets → env vars (Streamlit Cloud only, safe to skip locally) ─────────
 try:
-    for key in ["CRYPTOPANIC_KEY", "GEMINI_API_KEY"]:
+    for key in ["GNEWS_API_KEY", "GEMINI_API_KEY"]:
         if key in st.secrets:
             os.environ[key] = st.secrets[key]
 except Exception:
@@ -20,6 +36,17 @@ from src.allocation  import compute_allocation, portfolio_summary
 from src.advisor     import get_recommendation
 from config          import COIN_REGISTRY, DEFAULT_SELECTED
 
+@st.cache_resource(show_spinner=False)
+def _load_rag_models():
+    """
+    Load the SentenceTransformer embedder + ChromaDB once per Streamlit session.
+    @st.cache_resource keeps it alive across reruns — never downloaded twice.
+    """
+    from src.rag import _get_embedder, _get_collection
+    _get_embedder()
+    _get_collection()
+
+
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AI Crypto Advisor",
@@ -27,6 +54,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+with st.spinner("⚙️ Loading AI models… (first run only — may take ~30s)"):
+    _load_rag_models()
+
 
 # ─── Design System ────────────────────────────────────────────────────────────
 BG       = "#0A0E27"
@@ -330,7 +361,7 @@ with st.sidebar:
     st.markdown(f"<p style='font-size:0.7rem;font-weight:700;color:{WARNING};text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 6px'>🪙 Coins to Analyse</p>", unsafe_allow_html=True)
     sel_labels = st.multiselect("Select coins (all by default)",
                                  options=all_labels, default=all_labels)
-    sel_coins = [label_to_coin[l] for l in sel_labels][:3]
+    sel_coins = [label_to_coin[l] for l in sel_labels]
 
     # ── Risk Controls ─────────────────────────────────────────────────────────
     st.markdown(f"<p style='font-size:0.7rem;font-weight:700;color:{DANGER};text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 6px'>🛡 Risk Controls</p>", unsafe_allow_html=True)

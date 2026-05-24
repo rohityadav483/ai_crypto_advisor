@@ -22,7 +22,7 @@
 # streamlit
 # plotly
 
-streamlit==1.32.0
+streamlit
 pandas==2.1.4
 numpy==1.26.4
 yfinance
@@ -39,4 +39,4 @@ sentence-transformers
 chromadb
 python-dotenv
 requests
-google-generativeai
+google-genai

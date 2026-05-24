@@ -1,12 +1,11 @@
-
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
-import google.generativeai as genai
+from google import genai
 
-# ✅ Configure Gemini API correctly
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# ✅ Configure Gemini API with new google.genai client
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 def get_recommendation(amount, currency, risk, horizon, goal,
@@ -126,9 +125,10 @@ Identify risks and evaluate stop-loss.
 {detail}"""
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(prompt)
-
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
         return response.text if hasattr(response, "text") else str(response)
 
     except Exception as e:
